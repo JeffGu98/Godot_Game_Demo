@@ -3,13 +3,13 @@ extends Control
 const TileScript := preload("res://scripts/Tile.gd")
 
 const BOARD_SIZE := 6
-const CLEAR_VALUE := 16
+const CLEAR_VALUE := 32
 const START_TILES := 3
 const BOARD_PADDING := 12.0
 const TILE_GAP := 10.0
 const MOVE_DURATION := 0.14
-const MERGE_SETTLE_DURATION := 0.08
-const CLEAR_DURATION := 0.14
+const MERGE_SETTLE_DURATION := 0.16
+const CLEAR_DURATION := 0.22
 const SPAWN_DURATION := 0.22
 
 const DIR_LEFT := Vector2i(-1, 0)
@@ -86,7 +86,7 @@ func _build_ui() -> void:
 	title_label = _make_label("归零格", 38, Color("#f7eddd"), HORIZONTAL_ALIGNMENT_LEFT)
 	add_child(title_label)
 
-	rule_label = _make_label("MERGE 16  /  CLEAR", 16, Color("#b9c7d6"), HORIZONTAL_ALIGNMENT_LEFT)
+	rule_label = _make_label("BUBBLE 32  /  POP", 16, Color("#b9c7d6"), HORIZONTAL_ALIGNMENT_LEFT)
 	add_child(rule_label)
 
 	score_label = _make_stat_label()
@@ -476,7 +476,7 @@ func _update_stats() -> void:
 
 func _update_status(merges: int, cleared: int) -> void:
 	if cleared > 0:
-		status_label.text = "CLEAR x%d  /  COMBO x%d" % [cleared, combo]
+		status_label.text = "POP x%d  /  COMBO x%d" % [cleared, combo]
 	elif merges > 0:
 		status_label.text = "MERGE x%d" % merges
 	else:

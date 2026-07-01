@@ -1,6 +1,6 @@
 # 归零格 / ZeroGrid
 
-A small Godot 4 prototype for a keyboard-driven merge-and-clear board game.
+A small Godot 4 prototype for a keyboard-driven bubble merge-and-pop board game.
 
 Controls:
 
@@ -9,6 +9,7 @@ Controls:
 
 Prototype rule:
 
-- Matching numbers merge like 2048.
-- Any tile that reaches 16 clears itself and adjacent lower/equal tiles.
-- Score comes from merges, clears, and combo clears.
+- Matching bubbles merge like 2048.
+- Bubbles grow through 2, 4, 8, and 16 visual stages.
+- Any bubble that reaches 32 bursts and clears itself plus adjacent lower/equal bubbles.
+- Score comes from merges, pops, and pop combos.
