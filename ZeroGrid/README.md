@@ -12,4 +12,7 @@ Prototype rule:
 - Matching bubbles merge like 2048.
 - Bubbles grow through 2, 4, 8, and 16 visual stages.
 - Any bubble that reaches 32 bursts and clears itself plus adjacent lower/equal bubbles.
+- Every valid move adds pressure.
+- Bursting a 32 bubble drops pressure.
+- Max pressure triggers overload and spawns extra bubbles.
 - Score comes from merges, pops, and pop combos.

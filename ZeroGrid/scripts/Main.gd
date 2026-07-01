@@ -10,7 +10,12 @@ const TILE_GAP := 10.0
 const MOVE_DURATION := 0.14
 const MERGE_SETTLE_DURATION := 0.16
 const CLEAR_DURATION := 0.22
-const SPAWN_DURATION := 0.22
+const PRESSURE_MAX := 100
+const PRESSURE_PER_MOVE := 12
+const PRESSURE_POP_DROP := 35
+const PRESSURE_COMBO_DROP := 8
+const PRESSURE_OVERLOAD_RESET := 60
+const PRESSURE_OVERLOAD_EXTRA_SPAWNS := 2
 
 const DIR_LEFT := Vector2i(-1, 0)
 const DIR_RIGHT := Vector2i(1, 0)
@@ -29,8 +34,10 @@ var score := 0
 var best_score := 0
 var moves := 0
 var combo := 0
+var pressure := 0
 var game_over := false
 var is_animating := false
+var queued_direction := Vector2i.ZERO
 var cell_size := 64.0
 
 var background: ColorRect
@@ -39,6 +46,9 @@ var rule_label: Label
 var score_label: Label
 var best_label: Label
 var combo_label: Label
+var pressure_label: Label
+var pressure_track: Panel
+var pressure_fill: Panel
 var status_label: Label
 var board_panel: Panel
 var cell_nodes: Array[Panel] = []
@@ -61,20 +71,19 @@ func _unhandled_input(event: InputEvent) -> void:
 	var key_event := event as InputEventKey
 	if not key_event.pressed or key_event.echo:
 		return
-	if is_animating:
-		return
 
 	match key_event.keycode:
 		KEY_LEFT, KEY_A:
-			_try_move(DIR_LEFT)
+			_handle_move_input(DIR_LEFT)
 		KEY_RIGHT, KEY_D:
-			_try_move(DIR_RIGHT)
+			_handle_move_input(DIR_RIGHT)
 		KEY_UP, KEY_W:
-			_try_move(DIR_UP)
+			_handle_move_input(DIR_UP)
 		KEY_DOWN, KEY_S:
-			_try_move(DIR_DOWN)
+			_handle_move_input(DIR_DOWN)
 		KEY_R:
-			_new_game()
+			if not is_animating:
+				_new_game()
 
 
 func _build_ui() -> void:
@@ -97,6 +106,28 @@ func _build_ui() -> void:
 
 	combo_label = _make_stat_label()
 	add_child(combo_label)
+
+	pressure_label = _make_label("PRESSURE 0%", 14, Color("#c8d4e1"), HORIZONTAL_ALIGNMENT_LEFT)
+	add_child(pressure_label)
+
+	pressure_track = Panel.new()
+	var pressure_track_style := StyleBoxFlat.new()
+	pressure_track_style.bg_color = Color("#101820")
+	pressure_track_style.border_color = Color("#34475d")
+	pressure_track_style.border_width_left = 1
+	pressure_track_style.border_width_top = 1
+	pressure_track_style.border_width_right = 1
+	pressure_track_style.border_width_bottom = 1
+	pressure_track_style.corner_radius_top_left = 7
+	pressure_track_style.corner_radius_top_right = 7
+	pressure_track_style.corner_radius_bottom_left = 7
+	pressure_track_style.corner_radius_bottom_right = 7
+	pressure_track.add_theme_stylebox_override("panel", pressure_track_style)
+	add_child(pressure_track)
+
+	pressure_fill = Panel.new()
+	pressure_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pressure_track.add_child(pressure_fill)
 
 	board_panel = Panel.new()
 	var board_style := StyleBoxFlat.new()
@@ -175,6 +206,14 @@ func _layout() -> void:
 	score_label.position = best_label.position - Vector2(stat_width + stat_gap, 0.0)
 	score_label.size = Vector2(stat_width, 58.0)
 
+	pressure_label.position = Vector2(margin, 96.0)
+	pressure_label.size = Vector2(112.0, 20.0)
+
+	var pressure_track_x := margin + 116.0
+	var pressure_track_width: float = min(360.0, max(140.0, score_label.position.x - pressure_track_x - 20.0))
+	pressure_track.position = Vector2(pressure_track_x, 101.0)
+	pressure_track.size = Vector2(pressure_track_width, 12.0)
+
 	board_panel.size = Vector2(board_side, board_side)
 	board_panel.position = Vector2((viewport_size.x - board_side) * 0.5, 120.0)
 
@@ -189,29 +228,33 @@ func _layout() -> void:
 			cell.position = _cell_position(Vector2i(x, y))
 			cell.size = Vector2(cell_size, cell_size)
 
-	for tile in tile_nodes:
-		if is_instance_valid(tile):
-			tile.size = Vector2(cell_size, cell_size)
+	for rendered_tile in tile_nodes:
+		if is_instance_valid(rendered_tile):
+			rendered_tile.size = Vector2(cell_size, cell_size)
 
 	if not is_animating:
 		for pos in tiles_by_pos.keys():
-			var tile = tiles_by_pos[pos]
-			if is_instance_valid(tile):
-				tile.position = _cell_position(pos as Vector2i)
+			var positioned_tile = tiles_by_pos[pos]
+			if is_instance_valid(positioned_tile):
+				positioned_tile.position = _cell_position(pos as Vector2i)
+
+	_update_pressure_ui()
 
 
 func _new_game() -> void:
 	is_animating = false
+	queued_direction = Vector2i.ZERO
 	board = _empty_board()
 	score = 0
 	moves = 0
 	combo = 0
+	pressure = 0
 	game_over = false
 	status_label.text = "READY"
 
 	var spawn_positions: Array[Vector2i] = []
 	for i in range(START_TILES):
-		var spawn_result := _spawn_random_tile()
+		var spawn_result: Dictionary = _spawn_random_tile()
 		if spawn_result["spawned"]:
 			spawn_positions.append(spawn_result["position"])
 
@@ -236,21 +279,24 @@ func _try_move(direction: Vector2i) -> void:
 	board = result["board"]
 	score += result["score_gain"]
 	moves += 1
+	_add_pressure(PRESSURE_PER_MOVE)
 
 	_render_board([], result["merge_positions"])
 	_update_stats()
-	if not result["merge_positions"].is_empty():
+	if _has_clear_ready(result["merge_positions"]):
 		await get_tree().create_timer(MERGE_SETTLE_DURATION).timeout
 
-	var cleared_positions := _resolve_clears()
+	var cleared_positions: Array[Vector2i] = []
+	var burst_count := _resolve_clears(cleared_positions)
 	if cleared_positions.is_empty():
 		combo = 0
 	else:
 		combo += 1
 		score += cleared_positions.size() * 25 * combo
+		_drop_pressure(burst_count * PRESSURE_POP_DROP + max(0, combo - 1) * PRESSURE_COMBO_DROP)
 		_shake_board()
 		_update_stats()
-		_update_status(result["merges"], cleared_positions.size())
+		_update_status(result["merges"], cleared_positions.size(), 0)
 		await _animate_clears(cleared_positions)
 		_render_board()
 
@@ -258,21 +304,20 @@ func _try_move(direction: Vector2i) -> void:
 	var spawn_result := _spawn_random_tile()
 	if spawn_result["spawned"]:
 		spawn_positions.append(spawn_result["position"])
+	var overload_spawns := _spawn_pressure_overload(spawn_positions)
 
 	best_score = max(best_score, score)
 
 	_render_board(spawn_positions)
 	_update_stats()
-	_update_status(result["merges"], cleared_positions.size())
+	_update_status(result["merges"], cleared_positions.size(), overload_spawns)
 
 	if not _has_any_move():
 		game_over = true
 		status_label.text = "GAME OVER  /  R"
 
-	if not spawn_positions.is_empty():
-		await get_tree().create_timer(SPAWN_DURATION).timeout
-
 	is_animating = false
+	_consume_queued_direction()
 
 
 func _plan_slide(direction: Vector2i) -> Dictionary:
@@ -338,6 +383,30 @@ func _plan_slide(direction: Vector2i) -> Dictionary:
 	}
 
 
+func _handle_move_input(direction: Vector2i) -> void:
+	if is_animating:
+		queued_direction = direction
+		return
+
+	_try_move(direction)
+
+
+func _consume_queued_direction() -> void:
+	if queued_direction == Vector2i.ZERO or game_over:
+		return
+
+	var next_direction := queued_direction
+	queued_direction = Vector2i.ZERO
+	call_deferred("_try_move", next_direction)
+
+
+func _has_clear_ready(merge_positions: Array[Vector2i]) -> bool:
+	for pos in merge_positions:
+		if board[pos.y][pos.x] >= CLEAR_VALUE:
+			return true
+	return false
+
+
 func _line_coords(line_index: int, direction: Vector2i) -> Array[Vector2i]:
 	var coords: Array[Vector2i] = []
 
@@ -361,8 +430,9 @@ func _line_coords(line_index: int, direction: Vector2i) -> Array[Vector2i]:
 	return coords
 
 
-func _resolve_clears() -> Array[Vector2i]:
+func _resolve_clears(cleared: Array[Vector2i]) -> int:
 	var clear_map := {}
+	var burst_count := 0
 
 	for y in range(BOARD_SIZE):
 		for x in range(BOARD_SIZE):
@@ -371,13 +441,13 @@ func _resolve_clears() -> Array[Vector2i]:
 				continue
 
 			var origin := Vector2i(x, y)
+			burst_count += 1
 			clear_map[origin] = true
 			for offset in NEIGHBORS:
 				var neighbor: Vector2i = origin + offset
 				if _inside_board(neighbor) and board[neighbor.y][neighbor.x] > 0 and board[neighbor.y][neighbor.x] <= tile_value / 2:
 					clear_map[neighbor] = true
 
-	var cleared: Array[Vector2i] = []
 	for pos in clear_map.keys():
 		var clear_pos := pos as Vector2i
 		var cleared_value: int = board[clear_pos.y][clear_pos.x]
@@ -387,7 +457,7 @@ func _resolve_clears() -> Array[Vector2i]:
 		board[clear_pos.y][clear_pos.x] = 0
 		cleared.append(clear_pos)
 
-	return cleared
+	return burst_count
 
 
 func _animate_movements(motions: Array) -> void:
@@ -472,11 +542,14 @@ func _update_stats() -> void:
 	score_label.text = "SCORE\n%d" % score
 	best_label.text = "BEST\n%d" % best_score
 	combo_label.text = "COMBO\nx%d" % combo
+	_update_pressure_ui()
 
 
-func _update_status(merges: int, cleared: int) -> void:
+func _update_status(merges: int, cleared: int, overload_spawns: int = 0) -> void:
 	if cleared > 0:
 		status_label.text = "POP x%d  /  COMBO x%d" % [cleared, combo]
+	elif overload_spawns > 0:
+		status_label.text = "OVERLOAD  +%d" % overload_spawns
 	elif merges > 0:
 		status_label.text = "MERGE x%d" % merges
 	else:
@@ -489,6 +562,59 @@ func _shake_board() -> void:
 	tween.tween_property(board_panel, "position", home + Vector2(7.0, 0.0), 0.025)
 	tween.tween_property(board_panel, "position", home - Vector2(7.0, 0.0), 0.05)
 	tween.tween_property(board_panel, "position", home, 0.025)
+
+
+func _add_pressure(amount: int) -> void:
+	pressure = clampi(pressure + amount, 0, PRESSURE_MAX)
+
+
+func _drop_pressure(amount: int) -> void:
+	pressure = clampi(pressure - amount, 0, PRESSURE_MAX)
+
+
+func _spawn_pressure_overload(spawn_positions: Array[Vector2i]) -> int:
+	if pressure < PRESSURE_MAX:
+		return 0
+
+	pressure = PRESSURE_OVERLOAD_RESET
+	var spawned_count := 0
+	for i in range(PRESSURE_OVERLOAD_EXTRA_SPAWNS):
+		var spawn_result := _spawn_random_tile()
+		if spawn_result["spawned"]:
+			spawn_positions.append(spawn_result["position"])
+			spawned_count += 1
+
+	return spawned_count
+
+
+func _update_pressure_ui() -> void:
+	if pressure_label == null or pressure_fill == null or pressure_track == null:
+		return
+
+	var ratio: float = clamp(float(pressure) / float(PRESSURE_MAX), 0.0, 1.0)
+	var color: Color = _pressure_color(ratio)
+	pressure_label.text = "PRESSURE %d%%" % pressure
+	pressure_label.add_theme_color_override("font_color", color)
+
+	pressure_fill.position = Vector2.ZERO
+	var fill_width: float = 0.0 if ratio <= 0.0 else max(2.0, pressure_track.size.x * ratio)
+	pressure_fill.size = Vector2(fill_width, pressure_track.size.y)
+
+	var fill_style := StyleBoxFlat.new()
+	fill_style.bg_color = color
+	fill_style.corner_radius_top_left = 7
+	fill_style.corner_radius_top_right = 7
+	fill_style.corner_radius_bottom_left = 7
+	fill_style.corner_radius_bottom_right = 7
+	pressure_fill.add_theme_stylebox_override("panel", fill_style)
+
+	background.color = Color("#111923").lerp(Color("#24151d"), ratio)
+
+
+func _pressure_color(ratio: float) -> Color:
+	if ratio < 0.5:
+		return Color("#75d7ff").lerp(Color("#f4d66f"), ratio * 2.0)
+	return Color("#f4d66f").lerp(Color("#ff5a5f"), (ratio - 0.5) * 2.0)
 
 
 func _spawn_random_tile() -> Dictionary:
