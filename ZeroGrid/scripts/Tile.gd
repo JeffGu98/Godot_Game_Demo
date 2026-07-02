@@ -1,6 +1,11 @@
+## Visual bubble tile used by the ZeroGrid board.
+##
+## The node draws itself procedurally so the prototype can express bubble growth,
+## pressure cracks, and burst graphics without external art assets yet.
 extends Control
 class_name Tile
 
+# Gameplay value represented by this bubble. Visual pressure derives from value.
 var value := 2
 var pressure := 0.0
 
@@ -9,10 +14,12 @@ func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
+## Refreshes the drawing state once the node enters the scene tree.
 func _ready() -> void:
 	set_value(value)
 
 
+## Draws either a live bubble or the burst shape for value 32+.
 func _draw() -> void:
 	var center := size * 0.5
 	var radius: float = min(size.x, size.y) * _radius_scale_for_value(value)
@@ -45,12 +52,14 @@ func _draw() -> void:
 		_draw_pressure_cracks(center, radius)
 
 
+## Updates the tile value and redraws all pressure-dependent visuals.
 func set_value(next_value: int) -> void:
 	value = next_value
 	pressure = clamp(float(value) / 32.0, 0.0, 1.0)
 	queue_redraw()
 
 
+## Plays the short merge pop animation.
 func pop() -> void:
 	pivot_offset = size * 0.5
 	scale = Vector2(0.86, 0.86)
@@ -62,6 +71,7 @@ func pop() -> void:
 	tween.tween_property(self, "scale", Vector2.ONE, 0.18)
 
 
+## Plays the fade/scale-in animation for newly spawned bubbles.
 func spawn() -> void:
 	pivot_offset = size * 0.5
 	scale = Vector2(0.62, 0.62)
@@ -75,6 +85,7 @@ func spawn() -> void:
 	tween.tween_property(self, "modulate:a", 1.0, 0.18)
 
 
+## Grows bubble radius by value so higher tiers feel more pressurized.
 func _radius_scale_for_value(tile_value: int) -> float:
 	match tile_value:
 		2:
@@ -89,6 +100,7 @@ func _radius_scale_for_value(tile_value: int) -> float:
 			return 0.43
 
 
+## Returns the color palette used for each bubble tier.
 func _bubble_colors_for_value(tile_value: int) -> Dictionary:
 	match tile_value:
 		2:
@@ -128,6 +140,7 @@ func _bubble_colors_for_value(tile_value: int) -> Dictionary:
 			}
 
 
+## Draws small stage dots as a number-free hint for the current merge tier.
 func _draw_stage_marks(center: Vector2, radius: float) -> void:
 	var marks := clampi(int(log(float(value)) / log(2.0)) - 1, 1, 4)
 	var start_x := center.x - float(marks - 1) * radius * 0.12
@@ -138,6 +151,7 @@ func _draw_stage_marks(center: Vector2, radius: float) -> void:
 		draw_circle(mark_center, radius * 0.045, Color(1.0, 1.0, 1.0, 0.64))
 
 
+## Draws cracks on late-stage bubbles to telegraph an upcoming burst.
 func _draw_pressure_cracks(center: Vector2, radius: float) -> void:
 	var crack_color := Color("#5c172e")
 	crack_color.a = 0.72
@@ -165,6 +179,7 @@ func _draw_pressure_cracks(center: Vector2, radius: float) -> void:
 			draw_line(path[i], path[i + 1], crack_color, crack_width, true)
 
 
+## Draws the starburst graphic used when a bubble reaches the burst threshold.
 func _draw_burst(center: Vector2, radius: float) -> void:
 	var points: PackedVector2Array = []
 	var steps := 18
